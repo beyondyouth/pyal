@@ -2,7 +2,7 @@
 @Author: dong.zhili
 @Date: 1970-01-01 08:00:00
 @LastEditors  : dong.zhili
-@LastEditTime : 2020-01-17 19:00:01
+@LastEditTime : 2020-01-17 19:10:02
 @Description: 
 '''
 from pyalgotrade import strategy, broker, plotter
@@ -185,7 +185,7 @@ def run_strategy():
 
     # 图例添加SMA均线
     plt.getOrCreateSubplot("sma").addDataSeries("SMA", myStrategy.getSMA())
-    plt.getOrCreateSubplot("sma").addDataSeries("zxtx", myStrategy.getPriceDS())
+    plt.getOrCreateSubplot("sma").addDataSeries("test", myStrategy.getPriceDS())
 
     plt.getOrCreateSubplot("rsi").addDataSeries("RSI", myStrategy.getRSI())
     # 设置超卖线
