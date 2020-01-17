@@ -2,7 +2,7 @@
 @Author: dong.zhili
 @Date: 1970-01-01 08:00:00
 @LastEditors  : dong.zhili
-@LastEditTime : 2020-01-17 18:53:11
+@LastEditTime : 2020-01-17 19:00:01
 @Description: 
 '''
 from pyalgotrade import strategy, broker, plotter
@@ -100,17 +100,14 @@ class MyStrategy(strategy.BacktestingStrategy):
         # 买卖策略
 
         '''
-        若布林线包络扩张根据upper和lower的最近3日的线性回归斜率及rsi指标决定加仓层数
-        若布林线包络缩紧根据upper和lower的最近3日的线性回归斜率及rsi指标决定减仓层数
+        若布林线包络扩张根据upper和lower的最近3日的线性回归斜率及rsi指标决定加仓层数并置标志位
+        若布林线包络缩紧重置标志位，用于测量下次包络扩张
         '''
         # 计算线性回归线斜率
         rsiLinear = getLinearRegression(self.getRSI(), 7)
         upperLinear = getLinearRegression(self.__bbands.getUpperBand(), 3)
         lowerLinear = getLinearRegression(self.__bbands.getLowerBand(), 3)
         
-        # self.info("upperLinear %.2f " % upperLinear)
-        # self.info("lowerLinear %.2f " % lowerLinear)
-        # self.info("upperLinear - lowerLinear = %.2f " % (upperLinear - lowerLinear))
         # 买入策略
         if upperLinear - lowerLinear > 0.3:          # 包络扩张
             if rsiLinear > 0.3 and self.flag:        # 上行包络
@@ -161,8 +158,6 @@ class MyStrategy(strategy.BacktestingStrategy):
                 self.flag = False
         elif upperLinear - lowerLinear < -0.3:       # 包络缩紧
             self.flag = True
-        
-        self.__emptyPosition = 10 - self.__holdPosition
 
 def run_strategy():
     smaPeriod = 30
