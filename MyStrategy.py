@@ -2,13 +2,13 @@
 @Author: dong.zhili
 @Date: 1970-01-01 08:00:00
 @LastEditors  : dong.zhili
-@LastEditTime : 2020-01-17 19:10:02
+@LastEditTime : 2020-01-19 19:07:41
 @Description: 
 '''
 from pyalgotrade import strategy, broker, plotter
 from pyalgotrade.barfeed import quandlfeed
 from pyalgotrade.stratanalyzer import returns, sharpe
-from pyalgotrade.technical import ma, rsi, bollinger
+from pyalgotrade.technical import ma, macd, rsi, stoch, bollinger
 from pyalgotrade import broker as basebroker
 
 import numpy as np
@@ -35,13 +35,26 @@ def getLinearRegression(dataDS , num):
         numerator += (x[i]-x_mean)*(y[i]-y_mean)
         denominator += np.square((x[i]-x_mean))
     # print('numerator:',numerator,'denominator:',denominator)
-    b0 = numerator/denominator
+    try:
+        b0 = numerator/denominator
+    except:
+        b0 = 99
     b1 = y_mean - b0*x_mean
-    # print("b0 = %.2f" % b0)
     return b0
 
+# 判断a上穿b并保持
+def a_above_b(a_dataDS, b_dataDS, num):
+    if a_dataDS[-num] is None or b_dataDS[-num] is None:
+        return False
+    if a_dataDS[-num] > b_dataDS[-num]:
+        return False
+    for i in range(1, num):
+        if a_dataDS[i-num] <= b_dataDS[i-num]:
+            return False
+    return True
+
 class MyStrategy(strategy.BacktestingStrategy):
-    def __init__(self, feed, instrument, smaPeriod, rsiPeriod, bBandsPeriod):
+    def __init__(self, feed, instrument, bBandsPeriod):
         super(MyStrategy, self).__init__(feed)
         self.__instrument = instrument
         # 使用调整后的数据
@@ -55,23 +68,34 @@ class MyStrategy(strategy.BacktestingStrategy):
         self.__unit = self.getBroker().getCash(False) / 10
         # 统计收盘价
         self.__priceDS = feed[instrument].getPriceDataSeries()
-        # 计算SMA均线
-        self.__sma = ma.SMA(self.__priceDS, smaPeriod)
+        # 计算macd指标
+        self.__macd = macd.MACD(self.__priceDS, 12, 26, 9)
+        # 计算KD指标
+        self.__stoch = stoch.StochasticOscillator(feed[instrument], 9, 3)
         # 计算rsi指标
-        self.__rsi = rsi.RSI(self.__priceDS, rsiPeriod)
+        self.__rsi7 = rsi.RSI(self.__priceDS, 7)
+        self.__rsi14 = rsi.RSI(self.__priceDS, 14)
         # 计算布林线
         self.__bbands = bollinger.BollingerBands(self.__priceDS, bBandsPeriod, 2)
-        self.flag = True
+        # 买卖标志
+        self.bugflag = False
+        self.sellflag = False
 
     def getPriceDS(self):
         return self.__priceDS
         
-    def getSMA(self):
-        return self.__sma
+    def getMACD(self):
+        return self.__macd
 
-    def getRSI(self):
-        return self.__rsi
-    
+    def getStoch(self):
+        return self.__stoch
+        
+    def getRSI7(self):
+        return self.__rsi7
+        
+    def getRSI14(self):
+        return self.__rsi14
+
     def getBollingerBands(self):
         return self.__bbands
     
@@ -98,84 +122,70 @@ class MyStrategy(strategy.BacktestingStrategy):
         # 最新股价
         price = bar.getPrice()
         # 买卖策略
-
-        '''
-        若布林线包络扩张根据upper和lower的最近3日的线性回归斜率及rsi指标决定加仓层数并置标志位
-        若布林线包络缩紧重置标志位，用于测量下次包络扩张
-        '''
+        
         # 计算线性回归线斜率
-        rsiLinear = getLinearRegression(self.getRSI(), 7)
         upperLinear = getLinearRegression(self.__bbands.getUpperBand(), 3)
+        midLinear = getLinearRegression(self.__bbands.getMiddleBand(), 3)
         lowerLinear = getLinearRegression(self.__bbands.getLowerBand(), 3)
         
+        if a_above_b(self.__priceDS, self.__bbands.getMiddleBand(), 5) or a_above_b(self.__bbands.getMiddleBand(), self.__priceDS, 17):
+            self.bugflag = True
+            self.sellflag = False
+        
+        if a_above_b(self.__bbands.getMiddleBand(), self.__priceDS, 3):
+            self.sellflag = True
+            self.bugflag = False
         # 买入策略
-        if upperLinear - lowerLinear > 0.3:          # 包络扩张
-            if rsiLinear > 0.3 and self.flag:        # 上行包络
-                PositionToBuy = 0
-                if upperLinear - lowerLinear > 0.8 and self.__rsi[-2] < 50:     # 加仓3层
-                    if self.__emptyPosition >= 3:
-                        PositionToBuy = 3
-                    else:
-                        PositionToBuy = self.__emptyPosition
-                elif upperLinear - lowerLinear > 0.5 and self.__rsi[-2] < 70:   # 加仓2层
-                    if self.__emptyPosition >= 2:
-                        PositionToBuy = 2
-                    else:
-                        PositionToBuy = self.__emptyPosition
-                else:                                                           # 加仓1层
-                    if self.__emptyPosition >= 1:
-                        PositionToBuy = 1
-                    else:
-                        PositionToBuy = self.__emptyPosition
-                sharesToBuy = int(PositionToBuy * self.__unit / price)
-                if(self.marketOrder(self.__instrument, sharesToBuy)):
-                    self.__holdPosition += PositionToBuy
-                    self.__emptyPosition -= PositionToBuy
-                    self.info("Placing buy market order for %s shares" % sharesToBuy)
-                self.flag = False
-            elif rsiLinear < -0.3 and self.flag:        # 下行包络
-                PositionToSell = 0
-                if upperLinear - lowerLinear < -0.8 and self.__rsi[-2] > 50:    # 减仓3层
-                    if self.__holdPosition >= 3:
-                        PositionToSell = -3
-                    else:
-                        PositionToSell = self.__holdPosition
-                elif upperLinear - lowerLinear > 0.5 and self.__rsi[-2] > 30:   # 减仓2层
-                    if self.__holdPosition >= 2:
-                        PositionToSell = -2
-                    else:
-                        PositionToSell = self.__holdPosition
-                else:                                                           # 减仓1层
-                    if self.__holdPosition >= 1:
-                        PositionToSell = -1
-                    else:
-                        PositionToSell = self.__holdPosition
-                sharesToSell = int(PositionToSell * self.__unit / price)
-                if(self.marketOrder(self.__instrument, sharesToSell)):
-                    self.__holdPosition += PositionToSell
-                    self.__emptyPosition -= PositionToSell
-                    self.info("Placing sell market order for %s shares" % sharesToSell)
-                self.flag = False
-        elif upperLinear - lowerLinear < -0.3:       # 包络缩紧
-            self.flag = True
+        if self.__macd.getHistogram()[-1] is None or self.__macd.getHistogram()[-2] is None:
+            return
+        # 金叉形成
+        # if self.bugflag:
+        # if self.__macd.getHistogram()[-2] < 0 and self.__macd.getHistogram()[-1] > 0 and upperLinear - lowerLinear > 0.2 and midLinear > 0.1:
+        if self.__macd.getHistogram()[-2] < 0 and self.__macd.getHistogram()[-1] > 0 and self.__rsi7[-1] < 70:
+            PositionToBuy = 0
+            if self.__emptyPosition >= 3:
+                PositionToBuy = 3
+            else:
+                PositionToBuy = self.__emptyPosition
+            sharesToBuy = int(PositionToBuy * self.__unit / price)
+            if(self.marketOrder(self.__instrument, sharesToBuy)):
+                self.__holdPosition += PositionToBuy
+                self.__emptyPosition -= PositionToBuy
+                self.info("Placing buy market order for %s shares" % sharesToBuy)
+            # self.bugflag = False
+        # 死叉形成
+        # if self.sellflag:
+        # elif self.__macd.getHistogram()[-2] > 0 and self.__macd.getHistogram()[-1] < 0 and upperLinear - lowerLinear > 0.2 and midLinear < -0.1:
+        elif self.__macd.getHistogram()[-2] > 0 and self.__macd.getHistogram()[-1] < 0 and self.__rsi7[-1] > 30:
+            PositionToSell = 0
+            if self.__holdPosition >= 3:
+                PositionToSell = -3
+            else:
+                PositionToSell = self.__holdPosition
+            sharesToSell = int(PositionToSell * self.__unit / price)
+            if(self.marketOrder(self.__instrument, sharesToSell)):
+                self.__holdPosition += PositionToSell
+                self.__emptyPosition -= PositionToSell
+                self.info("Placing sell market order for %s shares" % sharesToSell)
+            # self.sellflag = False
+        # elif self.__macd.getHistogram()[-1] * self.__macd.getHistogram()[-2] < 0:
+            # self.flag = True
 
 def run_strategy():
-    smaPeriod = 30
-    rsiPeriod = 14
     bBandsPeriod = 21
-    instrument = "test"
+    instrument = "399300"
     
     # 下载股票数据
-    MyDownload.download_csv("399975", "2017-01-01", "2020-01-01", "399975.csv")
+    # MyDownload.download_csv(instrument, "2017-01-01", "2020-01-01", instrument+".csv")
     # 从CSV文件加载bar feed
     feed = quandlfeed.Feed()
-    feed.addBarsFromCSV(instrument, "399975.csv")
+    feed.addBarsFromCSV(instrument, instrument+".csv")
     
     # 创建MyStrategy实例
-    myStrategy = MyStrategy(feed, instrument, smaPeriod, rsiPeriod, bBandsPeriod)
+    myStrategy = MyStrategy(feed, instrument, bBandsPeriod)
 
     plt = plotter.StrategyPlotter(myStrategy, True, True, True)
-    # 图例添加布林线
+    # 图例添加BOLL
     plt.getInstrumentSubplot(instrument).addDataSeries("upper", myStrategy.getBollingerBands().getUpperBand())
     plt.getInstrumentSubplot(instrument).addDataSeries("middle", myStrategy.getBollingerBands().getMiddleBand())
     plt.getInstrumentSubplot(instrument).addDataSeries("lower", myStrategy.getBollingerBands().getLowerBand())
@@ -183,14 +193,19 @@ def run_strategy():
     # test = myStrategy.getBollingerBands().getUpperBand() - myStrategy.getBollingerBands().getLowerBand()
     # plt.getOrCreateSubplot("test").addDataSeries("test", test)
 
-    # 图例添加SMA均线
-    plt.getOrCreateSubplot("sma").addDataSeries("SMA", myStrategy.getSMA())
-    plt.getOrCreateSubplot("sma").addDataSeries("test", myStrategy.getPriceDS())
+    # 图例添加MACD
+    plt.getOrCreateSubplot("macd").addDataSeries("DIF", myStrategy.getMACD())
+    plt.getOrCreateSubplot("macd").addDataSeries("DEA", myStrategy.getMACD().getSignal())
+    plt.getOrCreateSubplot("macd").addDataSeries("MACD", myStrategy.getMACD().getHistogram())
 
-    plt.getOrCreateSubplot("rsi").addDataSeries("RSI", myStrategy.getRSI())
-    # 设置超卖线
+    # 图例添加KD
+    plt.getOrCreateSubplot("stoch").addDataSeries("K", myStrategy.getStoch())
+    plt.getOrCreateSubplot("stoch").addDataSeries("D", myStrategy.getStoch().getD())
+
+    # 图例添加RSI
+    plt.getOrCreateSubplot("rsi").addDataSeries("RSI7", myStrategy.getRSI7())
+    plt.getOrCreateSubplot("rsi").addDataSeries("RSI14", myStrategy.getRSI14())
     plt.getOrCreateSubplot("rsi").addLine("Overbought", 70)
-    # 设置超买线
     plt.getOrCreateSubplot("rsi").addLine("Oversold", 30)
 
     # 添加回测分析
