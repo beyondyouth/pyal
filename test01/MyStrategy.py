@@ -1,8 +1,8 @@
 '''
 @Author: dong.zhili
 @Date: 1970-01-01 08:00:00
-@LastEditors  : dong.zhili
-@LastEditTime : 2020-01-19 19:07:41
+@LastEditors: dong.zhili
+@LastEditTime: 2020-05-25 12:51:53
 @Description: 
 '''
 from pyalgotrade import strategy, broker, plotter
@@ -11,47 +11,7 @@ from pyalgotrade.stratanalyzer import returns, sharpe
 from pyalgotrade.technical import ma, macd, rsi, stoch, bollinger
 from pyalgotrade import broker as basebroker
 
-import numpy as np
 import MyDownload
-
-# 计算近num天的线性回归线斜率
-def getLinearRegression(dataDS , num):
-    count = 0
-    temp = []
-    for i in range(num):
-        if dataDS[i-num] is not None:
-            tmp = float(dataDS[i-num])
-            temp.append(tmp)
-            count += 1
-    x = np.array([i for i in range(count)])
-    y = np.array(temp)
-    if len(x) != len(y):
-        return
-    numerator = 0.0
-    denominator = 0.0
-    x_mean = np.mean(x)
-    y_mean = np.mean(y)
-    for i in range(len(x)):
-        numerator += (x[i]-x_mean)*(y[i]-y_mean)
-        denominator += np.square((x[i]-x_mean))
-    # print('numerator:',numerator,'denominator:',denominator)
-    try:
-        b0 = numerator/denominator
-    except:
-        b0 = 99
-    b1 = y_mean - b0*x_mean
-    return b0
-
-# 判断a上穿b并保持
-def a_above_b(a_dataDS, b_dataDS, num):
-    if a_dataDS[-num] is None or b_dataDS[-num] is None:
-        return False
-    if a_dataDS[-num] > b_dataDS[-num]:
-        return False
-    for i in range(1, num):
-        if a_dataDS[i-num] <= b_dataDS[i-num]:
-            return False
-    return True
 
 class MyStrategy(strategy.BacktestingStrategy):
     def __init__(self, feed, instrument, bBandsPeriod):
@@ -77,16 +37,13 @@ class MyStrategy(strategy.BacktestingStrategy):
         self.__rsi14 = rsi.RSI(self.__priceDS, 14)
         # 计算布林线
         self.__bbands = bollinger.BollingerBands(self.__priceDS, bBandsPeriod, 2)
-        # 买卖标志
-        self.bugflag = False
-        self.sellflag = False
-
+ 
     def getPriceDS(self):
         return self.__priceDS
         
     def getMACD(self):
         return self.__macd
-
+ 
     def getStoch(self):
         return self.__stoch
         
@@ -95,7 +52,7 @@ class MyStrategy(strategy.BacktestingStrategy):
         
     def getRSI14(self):
         return self.__rsi14
-
+ 
     def getBollingerBands(self):
         return self.__bbands
     
@@ -107,7 +64,7 @@ class MyStrategy(strategy.BacktestingStrategy):
         self.info("%s order %d updated - Status: %s" % (
             orderType, order.getId(), basebroker.Order.State.toString(order.getState())
         ))
-
+ 
     def onBars(self, bars):
         lower = self.__bbands.getLowerBand()[-1]
         middle = self.__bbands.getMiddleBand()[-1]
@@ -115,33 +72,18 @@ class MyStrategy(strategy.BacktestingStrategy):
         
         if lower is None:
             return
-
+ 
         bar = bars[self.__instrument]
-        # 持有份额
+        # 持有股票份额
         shares = self.getBroker().getShares(self.__instrument)
         # 最新股价
         price = bar.getPrice()
-        # 买卖策略
         
-        # 计算线性回归线斜率
-        upperLinear = getLinearRegression(self.__bbands.getUpperBand(), 3)
-        midLinear = getLinearRegression(self.__bbands.getMiddleBand(), 3)
-        lowerLinear = getLinearRegression(self.__bbands.getLowerBand(), 3)
-        
-        if a_above_b(self.__priceDS, self.__bbands.getMiddleBand(), 5) or a_above_b(self.__bbands.getMiddleBand(), self.__priceDS, 17):
-            self.bugflag = True
-            self.sellflag = False
-        
-        if a_above_b(self.__bbands.getMiddleBand(), self.__priceDS, 3):
-            self.sellflag = True
-            self.bugflag = False
         # 买入策略
         if self.__macd.getHistogram()[-1] is None or self.__macd.getHistogram()[-2] is None:
             return
         # 金叉形成
-        # if self.bugflag:
-        # if self.__macd.getHistogram()[-2] < 0 and self.__macd.getHistogram()[-1] > 0 and upperLinear - lowerLinear > 0.2 and midLinear > 0.1:
-        if self.__macd.getHistogram()[-2] < 0 and self.__macd.getHistogram()[-1] > 0 and self.__rsi7[-1] < 70:
+        if self.__macd.getHistogram()[-2] < 0 and self.__macd.getHistogram()[-1] > 0:
             PositionToBuy = 0
             if self.__emptyPosition >= 3:
                 PositionToBuy = 3
@@ -152,11 +94,8 @@ class MyStrategy(strategy.BacktestingStrategy):
                 self.__holdPosition += PositionToBuy
                 self.__emptyPosition -= PositionToBuy
                 self.info("Placing buy market order for %s shares" % sharesToBuy)
-            # self.bugflag = False
         # 死叉形成
-        # if self.sellflag:
-        # elif self.__macd.getHistogram()[-2] > 0 and self.__macd.getHistogram()[-1] < 0 and upperLinear - lowerLinear > 0.2 and midLinear < -0.1:
-        elif self.__macd.getHistogram()[-2] > 0 and self.__macd.getHistogram()[-1] < 0 and self.__rsi7[-1] > 30:
+        elif self.__macd.getHistogram()[-2] > 0 and self.__macd.getHistogram()[-1] < 0:
             PositionToSell = 0
             if self.__holdPosition >= 3:
                 PositionToSell = -3
@@ -167,16 +106,13 @@ class MyStrategy(strategy.BacktestingStrategy):
                 self.__holdPosition += PositionToSell
                 self.__emptyPosition -= PositionToSell
                 self.info("Placing sell market order for %s shares" % sharesToSell)
-            # self.sellflag = False
-        # elif self.__macd.getHistogram()[-1] * self.__macd.getHistogram()[-2] < 0:
-            # self.flag = True
 
 def run_strategy():
     bBandsPeriod = 21
     instrument = "399300"
     
     # 下载股票数据
-    # MyDownload.download_csv(instrument, "2017-01-01", "2020-01-01", instrument+".csv")
+    MyDownload.download_csv(instrument, "2017-01-01", "2020-01-01", instrument+".csv")
     # 从CSV文件加载bar feed
     feed = quandlfeed.Feed()
     feed.addBarsFromCSV(instrument, instrument+".csv")
